@@ -3,8 +3,12 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 
+# ML
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+
 st.set_page_config(page_title="Webinar Analyzer PRO+", layout="wide")
-st.title("🚀 Webinar Analyzer PRO+")
+st.title("🚀 Webinar Analyzer PRO+ (AI Powered)")
 
 file = st.file_uploader("Upload Excel", type=["xlsx"])
 
@@ -18,6 +22,7 @@ def find_header_row(df):
             return i
     return None
 
+
 if file:
     raw_df = pd.read_excel(file, header=None)
 
@@ -30,7 +35,7 @@ if file:
     df = pd.read_excel(file, header=header_row)
 
     # ==============================
-    # CLEANING
+    # CLEAN DATA
     # ==============================
     df.columns = df.columns.str.lower().str.strip()
 
@@ -60,10 +65,9 @@ if file:
         )
 
     df['hour'] = df['join_time'].dt.hour
-    df['date'] = df['join_time'].dt.date
 
     # ==============================
-    # USER LEVEL AGG
+    # USER LEVEL DATA
     # ==============================
     user_df = df.groupby('email').agg({
         'name': 'first',
@@ -83,15 +87,15 @@ if file:
     total_joins = len(df)
     avg_time = df['session_time'].mean()
 
-    engaged_users = user_df[user_df['total_time'] > 50]
-    engagement_rate = (len(engaged_users) / len(user_df)) * 100
+    engaged_users = user_df[user_df['total_time'] > 60]
+    engagement_rate = (len(engaged_users) / len(user_df)) * 100 if len(user_df) > 0 else 0
 
-    peak_hour = df['hour'].mode()[0]
+    peak_hour = df['hour'].mode()[0] if not df['hour'].mode().empty else "N/A"
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("👥 Users", unique_users)
     col2.metric("🔁 Joins", total_joins)
-    col3.metric("⏱ Avg Time", round(avg_time,1))
+    col3.metric("⏱ Avg Time", round(avg_time, 1))
     col4.metric("🔥 Engagement %", f"{round(engagement_rate,1)}%")
 
     st.info(f"⏰ Peak Join Time: {peak_hour}:00 hrs")
@@ -101,16 +105,7 @@ if file:
     # ==============================
     st.sidebar.header("Filters")
 
-    min_time = st.sidebar.slider("Min Session Time", 0, 200, 0)
-    selected_hour = st.sidebar.multiselect(
-        "Filter by Hour",
-        sorted(df['hour'].dropna().unique())
-    )
-
-    filtered_df = df.copy()
-
-    if selected_hour:
-        filtered_df = filtered_df[filtered_df['hour'].isin(selected_hour)]
+    min_time = st.sidebar.slider("Minimum Time", 0, 200, 0)
 
     filtered_users = user_df[user_df['total_time'] >= min_time]
 
@@ -118,99 +113,91 @@ if file:
     # SEARCH
     # ==============================
     search = st.text_input("🔍 Search User")
+
     if search:
         filtered_users = filtered_users[
-            filtered_users['email'].str.contains(search, case=False)
+            filtered_users['email'].str.contains(search, case=False, na=False)
         ]
+
+    # ==============================
+    # ML MODEL (SAFE VERSION)
+    # ==============================
+    ml_df = user_df.copy()
+
+    if len(ml_df) > 5:  # avoid crash on small data
+
+        ml_df['high_engagement'] = (ml_df['total_time'] > 60).astype(int)
+
+        X = ml_df[['total_time', 'join_count']]
+        y = ml_df['high_engagement']
+
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+
+        model = RandomForestClassifier()
+        model.fit(X_train, y_train)
+
+        ml_df['engagement_prob'] = model.predict_proba(X)[:, 1]
+        ml_df['engagement_score'] = (ml_df['engagement_prob'] * 100).round(1)
+
+    else:
+        ml_df['engagement_score'] = 0
 
     # ==============================
     # TABLE
     # ==============================
     st.markdown("### 📋 User Report")
-    st.dataframe(filtered_users.sort_values('total_time', ascending=False),
-                 use_container_width=True)
+
+    display_df = filtered_users.merge(
+        ml_df[['email', 'engagement_score']],
+        on='email',
+        how='left'
+    )
+
+    st.dataframe(
+        display_df.sort_values(by='total_time', ascending=False),
+        use_container_width=True
+    )
 
     # ==============================
-    # CHART 1: TOP USERS
+    # CHARTS
     # ==============================
     st.markdown("### 📊 Top Users")
+
     fig1 = px.bar(
-        filtered_users.head(10),
+        display_df.head(10),
         x='email',
         y='total_time',
-        title="Top 10 Users by Engagement Time"
+        title="Top Users by Time"
     )
     st.plotly_chart(fig1, use_container_width=True)
 
-    # ==============================
-    # CHART 2: HOURLY DISTRIBUTION
-    # ==============================
-    st.markdown("### ⏰ Hourly Join Distribution")
+    st.markdown("### 📈 Session Distribution")
+
+    fig2 = px.histogram(
+        df,
+        x='session_time',
+        nbins=30,
+        title="Session Time Distribution"
+    )
+    st.plotly_chart(fig2, use_container_width=True)
+
+    st.markdown("### ⏰ Hourly Joins")
+
     hourly = df['hour'].value_counts().sort_index()
 
-    fig2 = px.line(
+    fig3 = px.line(
         x=hourly.index,
         y=hourly.values,
         markers=True,
         title="Joins by Hour"
     )
-    st.plotly_chart(fig2, use_container_width=True)
-
-    # ==============================
-    # CHART 3: SESSION DISTRIBUTION
-    # ==============================
-    st.markdown("### 📈 Session Time Distribution")
-
-    fig3 = px.histogram(
-        df,
-        x='session_time',
-        nbins=30,
-        title="Session Duration Distribution"
-    )
     st.plotly_chart(fig3, use_container_width=True)
-
-    # ==============================
-    # COHORT ANALYSIS
-    # ==============================
-    st.markdown("### 🧠 Cohort Analysis")
-
-    df['cohort'] = df.groupby('email')['join_time'].transform('min').dt.date
-
-    cohort_data = df.groupby(['cohort', 'date']).size().reset_index(name='users')
-
-    fig4 = px.line(
-        cohort_data,
-        x='date',
-        y='users',
-        color='cohort',
-        title="User Retention Over Time"
-    )
-    st.plotly_chart(fig4, use_container_width=True)
-
-    # ==============================
-    # HEATMAP
-    # ==============================
-    st.markdown("### 🔥 Engagement Heatmap")
-
-    heatmap = df.pivot_table(
-        index='hour',
-        columns='date',
-        values='email',
-        aggfunc='count'
-    )
-
-    fig5 = px.imshow(
-        heatmap,
-        aspect="auto",
-        title="Hourly Engagement Heatmap"
-    )
-    st.plotly_chart(fig5, use_container_width=True)
 
     # ==============================
     # DOWNLOAD
     # ==============================
     st.download_button(
         "📥 Download Report",
-        filtered_users.to_csv(index=False),
+        display_df.to_csv(index=False),
         "webinar_report.csv"
     )
