@@ -1,13 +1,19 @@
 import streamlit as st
 import pandas as pd
 
+# ==============================
+# PAGE SETUP
+# ==============================
 st.set_page_config(page_title="Webinar Analyzer PRO", layout="wide")
-
 st.title("🚀 Webinar Analyzer PRO")
 
+# ==============================
+# FILE UPLOAD
+# ==============================
 file = st.file_uploader("Upload Excel", type=["xlsx"])
 
 if file:
+
     # ==============================
     # STEP 1: READ RAW FILE
     # ==============================
@@ -15,8 +21,10 @@ if file:
 
     def find_header_row(df):
         for i in range(len(df)):
-            row = df.iloc[i].astype(str).str.lower()
-            if 'email' in ' '.join(row) and 'join' in ' '.join(row):
+            row = df.iloc[i]
+            row_str = ' '.join([str(x).lower() for x in row])
+
+            if 'email' in row_str and ('join' in row_str or 'time' in row_str):
                 return i
         return None
 
@@ -35,6 +43,7 @@ if file:
 
     df.rename(columns={
         'user email': 'email',
+        'email address': 'email',
         'name': 'name',
         'join time': 'join_time',
         'leave time': 'leave_time',
@@ -42,6 +51,7 @@ if file:
         'time in session': 'session_time'
     }, inplace=True)
 
+    # Remove invalid rows
     df = df[df['email'].notna()]
     df = df[df['email'].astype(str).str.contains('@')]
     df = df[df['email'] != 'user email']
@@ -81,14 +91,11 @@ if file:
     # ==============================
     # STEP 5: BUSINESS INSIGHTS
     # ==============================
-
-    # Highly engaged users (>50 mins)
     engaged_users = result[result['total_time'] > 50]
-    engagement_rate = (len(engaged_users) / len(result)) * 100
+    engagement_rate = (len(engaged_users) / len(result)) * 100 if len(result) > 0 else 0
 
-    # Peak join time
     df['hour'] = df['join_time'].dt.hour
-    peak_hour = df['hour'].mode()[0]
+    peak_hour = df['hour'].mode()[0] if not df['hour'].mode().empty else "N/A"
 
     # ==============================
     # STEP 6: DISPLAY METRICS
@@ -97,7 +104,7 @@ if file:
 
     col1.metric("👥 Users", unique_users)
     col2.metric("🔁 Joins", total_joins)
-    col3.metric("⏱ Avg Time", round(avg_time, 1))
+    col3.metric("⏱ Avg Time", round(avg_time, 1) if pd.notna(avg_time) else 0)
     col4.metric("🔥 Engagement %", f"{round(engagement_rate,1)}%")
 
     st.info(f"⏰ Peak Join Time: {peak_hour}:00 hrs")
@@ -108,7 +115,7 @@ if file:
     search = st.text_input("🔍 Search User")
 
     if search:
-        result = result[result['email'].str.contains(search, case=False)]
+        result = result[result['email'].str.contains(search, case=False, na=False)]
 
     # ==============================
     # STEP 8: TABLE
@@ -119,7 +126,7 @@ if file:
     # ==============================
     # STEP 9: CHARTS
     # ==============================
-    st.markdown("### 📊 Top 10 Users")
+    st.markdown("### 📊 Top 10 Users by Time")
     st.bar_chart(result.head(10).set_index('email')['total_time'])
 
     st.markdown("### 📈 Join Count Distribution")
@@ -131,5 +138,5 @@ if file:
     st.download_button(
         "📥 Download Report",
         result.to_csv(index=False),
-        "webinar_report.csv"
+        file_name="webinar_report.csv"
     )
