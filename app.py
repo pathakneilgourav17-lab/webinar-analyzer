@@ -2,11 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import MinMaxScaler
 
-st.set_page_config(page_title="Webinar Analyzer PRO++", layout="wide")
-st.title("🚀 Webinar Analyzer PRO++ (AI + Retention Intelligence)")
+st.set_page_config(page_title="Webinar Analyzer PRO+", layout="wide")
+st.title("🚀 Webinar Analyzer PRO+")
 
 file = st.file_uploader("Upload Excel", type=["xlsx"])
 
@@ -22,6 +20,7 @@ def find_header_row(df):
 
 if file:
     raw_df = pd.read_excel(file, header=None)
+
     header_row = find_header_row(raw_df)
 
     if header_row is None:
@@ -77,113 +76,141 @@ if file:
         'join_time': 'join_count'
     }, inplace=True)
 
-    user_df['avg_time'] = user_df['total_time'] / user_df['join_count']
-
-    # ==============================
-    # RETENTION FEATURE
-    # ==============================
-    user_df['active_days'] = df.groupby('email')['date'].nunique().values
-
-    # Dropout label (Low engagement)
-    user_df['dropout'] = (user_df['total_time'] < 30).astype(int)
-
-    features = ['total_time', 'join_count', 'avg_time', 'active_days']
-
-    # ==============================
-    # ML MODEL
-    # ==============================
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(user_df[features], user_df['dropout'])
-
-    dropout_prob = model.predict_proba(user_df[features])[:, 1]
-
-    scaler = MinMaxScaler()
-    user_df['dropout_risk'] = scaler.fit_transform(dropout_prob.reshape(-1,1)) * 100
-    user_df['dropout_risk'] = user_df['dropout_risk'].round(0)
-
-    # Engagement Score (inverse of dropout)
-    user_df['engagement_score'] = 100 - user_df['dropout_risk']
-
-    # Segmentation
-    def segment(score):
-        if score > 70:
-            return "High"
-        elif score > 40:
-            return "Medium"
-        else:
-            return "Low"
-
-    user_df['segment'] = user_df['engagement_score'].apply(segment)
-
     # ==============================
     # METRICS
     # ==============================
     unique_users = df['email'].nunique()
     total_joins = len(df)
     avg_time = df['session_time'].mean()
-    retention_rate = (user_df['active_days'] > 1).mean() * 100
-    dropout_rate = (user_df['dropout'] == 1).mean() * 100
+
+    engaged_users = user_df[user_df['total_time'] > 50]
+    engagement_rate = (len(engaged_users) / len(user_df)) * 100
 
     peak_hour = df['hour'].mode()[0]
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("👥 Users", unique_users)
     col2.metric("🔁 Joins", total_joins)
-    col3.metric("📈 Retention %", round(retention_rate,1))
-    col4.metric("⚠️ Dropout %", round(dropout_rate,1))
+    col3.metric("⏱ Avg Time", round(avg_time,1))
+    col4.metric("🔥 Engagement %", f"{round(engagement_rate,1)}%")
 
     st.info(f"⏰ Peak Join Time: {peak_hour}:00 hrs")
 
     # ==============================
-    # FILTER
+    # FILTERS
     # ==============================
     st.sidebar.header("Filters")
 
-    min_score = st.sidebar.slider("Min Engagement Score", 0, 100, 0)
+    min_time = st.sidebar.slider("Min Session Time", 0, 200, 0)
+    selected_hour = st.sidebar.multiselect(
+        "Filter by Hour",
+        sorted(df['hour'].dropna().unique())
+    )
 
-    filtered = user_df[user_df['engagement_score'] >= min_score]
+    filtered_df = df.copy()
+
+    if selected_hour:
+        filtered_df = filtered_df[filtered_df['hour'].isin(selected_hour)]
+
+    filtered_users = user_df[user_df['total_time'] >= min_time]
 
     # ==============================
     # SEARCH
     # ==============================
     search = st.text_input("🔍 Search User")
     if search:
-        filtered = filtered[
-            filtered['email'].str.contains(search, case=False)
+        filtered_users = filtered_users[
+            filtered_users['email'].str.contains(search, case=False)
         ]
 
     # ==============================
     # TABLE
     # ==============================
     st.markdown("### 📋 User Report")
-    st.dataframe(filtered.sort_values('engagement_score', ascending=False),
+    st.dataframe(filtered_users.sort_values('total_time', ascending=False),
                  use_container_width=True)
 
     # ==============================
-    # CHARTS
+    # CHART 1: TOP USERS
     # ==============================
-
-    st.markdown("### 📊 Engagement vs Dropout")
-    fig1 = px.scatter(user_df,
-                      x='total_time',
-                      y='dropout_risk',
-                      color='segment',
-                      hover_data=['email'])
+    st.markdown("### 📊 Top Users")
+    fig1 = px.bar(
+        filtered_users.head(10),
+        x='email',
+        y='total_time',
+        title="Top 10 Users by Engagement Time"
+    )
     st.plotly_chart(fig1, use_container_width=True)
 
-    st.markdown("### 🎯 Segment Distribution")
-    fig2 = px.pie(user_df, names='segment')
+    # ==============================
+    # CHART 2: HOURLY DISTRIBUTION
+    # ==============================
+    st.markdown("### ⏰ Hourly Join Distribution")
+    hourly = df['hour'].value_counts().sort_index()
+
+    fig2 = px.line(
+        x=hourly.index,
+        y=hourly.values,
+        markers=True,
+        title="Joins by Hour"
+    )
     st.plotly_chart(fig2, use_container_width=True)
 
-    st.markdown("### 🔥 Dropout Risk Distribution")
-    fig3 = px.histogram(user_df, x='dropout_risk', nbins=20)
+    # ==============================
+    # CHART 3: SESSION DISTRIBUTION
+    # ==============================
+    st.markdown("### 📈 Session Time Distribution")
+
+    fig3 = px.histogram(
+        df,
+        x='session_time',
+        nbins=30,
+        title="Session Duration Distribution"
+    )
     st.plotly_chart(fig3, use_container_width=True)
+
+    # ==============================
+    # COHORT ANALYSIS
+    # ==============================
+    st.markdown("### 🧠 Cohort Analysis")
+
+    df['cohort'] = df.groupby('email')['join_time'].transform('min').dt.date
+
+    cohort_data = df.groupby(['cohort', 'date']).size().reset_index(name='users')
+
+    fig4 = px.line(
+        cohort_data,
+        x='date',
+        y='users',
+        color='cohort',
+        title="User Retention Over Time"
+    )
+    st.plotly_chart(fig4, use_container_width=True)
+
+    # ==============================
+    # HEATMAP
+    # ==============================
+    st.markdown("### 🔥 Engagement Heatmap")
+
+    heatmap = df.pivot_table(
+        index='hour',
+        columns='date',
+        values='email',
+        aggfunc='count'
+    )
+
+    fig5 = px.imshow(
+        heatmap,
+        aspect="auto",
+        title="Hourly Engagement Heatmap"
+    )
+    st.plotly_chart(fig5, use_container_width=True)
 
     # ==============================
     # DOWNLOAD
     # ==============================
     st.download_button(
         "📥 Download Report",
-        filtered.to_csv(index=False),
-        "webinar_ai_advanced_report.csv"
+        filtered_users.to_csv(index=False),
+        "webinar_report.csv"
     )
