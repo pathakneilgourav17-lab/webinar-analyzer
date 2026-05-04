@@ -12,45 +12,76 @@ file = st.file_uploader(
 )
 
 # ==============================
-# HEADER DETECTION
+# HEADER DETECTION (SMART)
 # ==============================
 def find_header_row(df):
+    keywords = ['email', 'mail', 'name', 'join', 'time', 'duration']
+
     for i in range(len(df)):
-        row_str = ' '.join([str(x).lower() for x in df.iloc[i]])
-        if 'email' in row_str and ('join' in row_str or 'time' in row_str):
+        row = df.iloc[i].astype(str).str.lower()
+        match_count = sum(any(k in cell for k in keywords) for cell in row)
+
+        if match_count >= 2:
             return i
+
     return None
 
+
 # ==============================
-# SMART FILE READER (DYNAMIC)
+# SMART FILE READER
 # ==============================
 def read_file(file, header=None):
     try:
-        # 🔥 Smart auto-detection (CSV/TSV/TXT)
         df = pd.read_csv(
             file,
             header=header,
-            sep=None,              # auto-detect delimiter
-            engine="python",       # flexible parser
+            sep=None,
+            engine="python",
             encoding="utf-8",
-            on_bad_lines="skip"    # skip bad rows
+            on_bad_lines="skip"
         )
         return df
 
     except Exception:
         file.seek(0)
         try:
-            # fallback to Excel
             return pd.read_excel(file, header=header)
         except Exception:
             return None
+
+
+# ==============================
+# 🔥 AUTO COLUMN DETECTION
+# ==============================
+def auto_map_columns(df):
+    col_map = {}
+
+    for col in df.columns:
+        c = col.lower()
+
+        if any(k in c for k in ['email', 'mail']):
+            col_map[col] = 'email'
+
+        elif any(k in c for k in ['name', 'user']):
+            col_map[col] = 'name'
+
+        elif any(k in c for k in ['join', 'login', 'start']):
+            col_map[col] = 'join_time'
+
+        elif any(k in c for k in ['leave', 'logout', 'end']):
+            col_map[col] = 'leave_time'
+
+        elif any(k in c for k in ['duration', 'time', 'minutes']):
+            col_map[col] = 'session_time'
+
+    return col_map
+
 
 # ==============================
 # MAIN LOGIC
 # ==============================
 if file:
 
-    # First read (no header)
     raw_df = read_file(file, header=None)
 
     if raw_df is None or raw_df.empty:
@@ -60,46 +91,44 @@ if file:
     header_row = find_header_row(raw_df)
 
     if header_row is None:
-        st.error("❌ Could not detect header row")
-        st.stop()
+        header_row = 0
+        st.warning("⚠️ Header not detected, using first row")
 
-    # Reset file pointer
     file.seek(0)
 
-    # Second read (with header)
     df = read_file(file, header=header_row)
 
     if df is None or df.empty:
-        st.error("❌ File parsing failed after header detection")
+        st.error("❌ File parsing failed")
         st.stop()
 
     # ==============================
     # CLEANING
     # ==============================
     df = df.dropna(how='all')
-
     df.columns = df.columns.astype(str).str.lower().str.strip()
 
-    df.rename(columns={
-        'user email': 'email',
-        'email address': 'email',
-        'participant email': 'email',
-        'name': 'name',
-        'full name': 'name',
-        'join time': 'join_time',
-        'joined at': 'join_time',
-        'leave time': 'leave_time',
-        'left at': 'leave_time',
-        'duration (minutes)': 'session_time',
-        'time in session': 'session_time'
-    }, inplace=True)
+    # 🔥 AUTO MAP COLUMNS
+    col_map = auto_map_columns(df)
+    df.rename(columns=col_map, inplace=True)
+
+    st.sidebar.write("🔍 Detected Columns:", col_map)
+
+    # ==============================
+    # EMAIL FALLBACK
+    # ==============================
+    if 'email' not in df.columns:
+        for col in df.columns:
+            if df[col].astype(str).str.contains('@').any():
+                df.rename(columns={col: 'email'}, inplace=True)
+                break
 
     if 'email' not in df.columns:
-        st.error("❌ Email column not found")
-        st.stop()
+        df['email'] = df.index.astype(str)
+        st.warning("⚠️ Email not found, using row index as identifier")
 
     df = df[df['email'].notna()]
-    df = df[df['email'].astype(str).str.contains('@', na=False)]
+    df = df[df['email'].astype(str).str.len() > 0]
 
     # ==============================
     # TIME HANDLING
@@ -117,8 +146,11 @@ if file:
                 .dt.total_seconds() / 60
             )
 
-    df['hour'] = df['join_time'].dt.hour
-    df['date'] = df['join_time'].dt.date
+    if 'session_time' not in df.columns:
+        df['session_time'] = 0
+
+    df['hour'] = df['join_time'].dt.hour if 'join_time' in df.columns else 0
+    df['date'] = df['join_time'].dt.date if 'join_time' in df.columns else None
 
     # ==============================
     # USER LEVEL AGG
@@ -126,7 +158,7 @@ if file:
     user_df = df.groupby('email').agg({
         'name': 'first' if 'name' in df.columns else 'count',
         'session_time': 'sum',
-        'join_time': 'count'
+        'join_time': 'count' if 'join_time' in df.columns else 'size'
     }).reset_index()
 
     user_df.rename(columns={
@@ -178,7 +210,7 @@ if file:
     search = st.text_input("🔍 Search User")
     if search:
         filtered_users = filtered_users[
-            filtered_users['email'].str.contains(search, case=False, na=False)
+            filtered_users['email'].astype(str).str.contains(search, case=False, na=False)
         ]
 
     # ==============================
@@ -223,32 +255,34 @@ if file:
     st.plotly_chart(fig3, use_container_width=True)
 
     st.markdown("### 🧠 Cohort Analysis")
-    df['cohort'] = df.groupby('email')['join_time'].transform('min').dt.date
-    cohort_data = df.groupby(['cohort', 'date']).size().reset_index(name='users')
+    if 'join_time' in df.columns:
+        df['cohort'] = df.groupby('email')['join_time'].transform('min').dt.date
+        cohort_data = df.groupby(['cohort', 'date']).size().reset_index(name='users')
 
-    fig4 = px.line(
-        cohort_data,
-        x='date',
-        y='users',
-        color='cohort',
-        title="User Retention Over Time"
-    )
-    st.plotly_chart(fig4, use_container_width=True)
+        fig4 = px.line(
+            cohort_data,
+            x='date',
+            y='users',
+            color='cohort',
+            title="User Retention Over Time"
+        )
+        st.plotly_chart(fig4, use_container_width=True)
 
     st.markdown("### 🔥 Engagement Heatmap")
-    heatmap = df.pivot_table(
-        index='hour',
-        columns='date',
-        values='email',
-        aggfunc='count'
-    )
+    if 'hour' in df.columns and 'date' in df.columns:
+        heatmap = df.pivot_table(
+            index='hour',
+            columns='date',
+            values='email',
+            aggfunc='count'
+        )
 
-    fig5 = px.imshow(
-        heatmap,
-        aspect="auto",
-        title="Hourly Engagement Heatmap"
-    )
-    st.plotly_chart(fig5, use_container_width=True)
+        fig5 = px.imshow(
+            heatmap,
+            aspect="auto",
+            title="Hourly Engagement Heatmap"
+        )
+        st.plotly_chart(fig5, use_container_width=True)
 
     # ==============================
     # DOWNLOAD
