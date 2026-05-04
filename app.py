@@ -22,19 +22,28 @@ def find_header_row(df):
     return None
 
 # ==============================
-# FILE READER (MULTI-FORMAT)
+# SMART FILE READER (DYNAMIC)
 # ==============================
 def read_file(file, header=None):
-    file_type = file.name.split('.')[-1].lower()
+    try:
+        # 🔥 Smart auto-detection (CSV/TSV/TXT)
+        df = pd.read_csv(
+            file,
+            header=header,
+            sep=None,              # auto-detect delimiter
+            engine="python",       # flexible parser
+            encoding="utf-8",
+            on_bad_lines="skip"    # skip bad rows
+        )
+        return df
 
-    if file_type in ["xlsx", "xls"]:
-        return pd.read_excel(file, header=header)
-    elif file_type == "csv":
-        return pd.read_csv(file, header=header)
-    elif file_type in ["tsv", "txt"]:
-        return pd.read_csv(file, sep="\t", header=header)
-    else:
-        return None
+    except Exception:
+        file.seek(0)
+        try:
+            # fallback to Excel
+            return pd.read_excel(file, header=header)
+        except Exception:
+            return None
 
 # ==============================
 # MAIN LOGIC
@@ -44,8 +53,8 @@ if file:
     # First read (no header)
     raw_df = read_file(file, header=None)
 
-    if raw_df is None:
-        st.error("❌ Unsupported file format")
+    if raw_df is None or raw_df.empty:
+        st.error("❌ File could not be parsed")
         st.stop()
 
     header_row = find_header_row(raw_df)
@@ -60,17 +69,27 @@ if file:
     # Second read (with header)
     df = read_file(file, header=header_row)
 
+    if df is None or df.empty:
+        st.error("❌ File parsing failed after header detection")
+        st.stop()
+
     # ==============================
     # CLEANING
     # ==============================
-    df.columns = df.columns.str.lower().str.strip()
+    df = df.dropna(how='all')
+
+    df.columns = df.columns.astype(str).str.lower().str.strip()
 
     df.rename(columns={
         'user email': 'email',
         'email address': 'email',
+        'participant email': 'email',
         'name': 'name',
+        'full name': 'name',
         'join time': 'join_time',
+        'joined at': 'join_time',
         'leave time': 'leave_time',
+        'left at': 'leave_time',
         'duration (minutes)': 'session_time',
         'time in session': 'session_time'
     }, inplace=True)
@@ -80,7 +99,7 @@ if file:
         st.stop()
 
     df = df[df['email'].notna()]
-    df = df[df['email'].astype(str).str.contains('@')]
+    df = df[df['email'].astype(str).str.contains('@', na=False)]
 
     # ==============================
     # TIME HANDLING
@@ -105,7 +124,7 @@ if file:
     # USER LEVEL AGG
     # ==============================
     user_df = df.groupby('email').agg({
-        'name': 'first',
+        'name': 'first' if 'name' in df.columns else 'count',
         'session_time': 'sum',
         'join_time': 'count'
     }).reset_index()
@@ -123,7 +142,7 @@ if file:
     avg_time = df['session_time'].mean()
 
     engaged_users = user_df[user_df['total_time'] > 50]
-    engagement_rate = (len(engaged_users) / len(user_df)) * 100
+    engagement_rate = (len(engaged_users) / len(user_df)) * 100 if len(user_df) > 0 else 0
 
     peak_hour = df['hour'].mode()[0] if not df['hour'].mode().empty else "N/A"
 
@@ -159,7 +178,7 @@ if file:
     search = st.text_input("🔍 Search User")
     if search:
         filtered_users = filtered_users[
-            filtered_users['email'].str.contains(search, case=False)
+            filtered_users['email'].str.contains(search, case=False, na=False)
         ]
 
     # ==============================
