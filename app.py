@@ -6,22 +6,22 @@ import plotly.express as px
 # PAGE CONFIG
 # =====================================================
 st.set_page_config(
-    page_title="Webinar Analyzer PRO+",
+    page_title="Webinar Attendance Analyzer",
     layout="wide"
 )
 
-st.title("🚀 Webinar Analyzer PRO+")
+st.title("🚀 Webinar Attendance Analyzer")
 
 # =====================================================
 # FILE UPLOAD
 # =====================================================
 uploaded_file = st.file_uploader(
-    "Upload Webinar File",
+    "Upload Webinar Attendance File",
     type=["xls", "xlsx", "csv"]
 )
 
 # =====================================================
-# FILE READER
+# READ FILE
 # =====================================================
 def read_file(file, header=None):
 
@@ -29,7 +29,6 @@ def read_file(file, header=None):
 
         file.seek(0)
 
-        # CSV
         if file.name.endswith(".csv"):
 
             return pd.read_csv(
@@ -39,7 +38,6 @@ def read_file(file, header=None):
                 on_bad_lines="skip"
             )
 
-        # XLS
         elif file.name.endswith(".xls"):
 
             return pd.read_excel(
@@ -48,7 +46,6 @@ def read_file(file, header=None):
                 engine="xlrd"
             )
 
-        # XLSX
         else:
 
             return pd.read_excel(
@@ -59,26 +56,23 @@ def read_file(file, header=None):
 
     except Exception as e:
 
-        st.error(f"❌ File Read Error: {e}")
+        st.error(f"❌ Error Reading File: {e}")
         return None
 
 
 # =====================================================
-# FIND ACTUAL ATTENDEE HEADER
+# FIND ATTENDEE HEADER
 # =====================================================
 def find_attendee_header(df):
 
     keywords = [
-        "first name",
-        "last name",
+        "user name",
         "join time",
         "leave time",
         "time in ses"
     ]
 
-    max_rows = min(40, len(df))
-
-    for i in range(max_rows):
+    for i in range(min(40, len(df))):
 
         try:
 
@@ -90,10 +84,10 @@ def find_attendee_header(df):
                 .tolist()
             )
 
-            joined = " ".join(row)
+            row_text = " ".join(row)
 
             score = sum(
-                keyword in joined
+                keyword in row_text
                 for keyword in keywords
             )
 
@@ -128,7 +122,7 @@ if uploaded_file:
     header_row = find_attendee_header(raw_df)
 
     st.sidebar.success(
-        f"✅ Attendee Header Found at Row: {header_row}"
+        f"✅ Header Found at Row: {header_row}"
     )
 
     # =====================================================
@@ -156,7 +150,7 @@ if uploaded_file:
     df = df.loc[:, ~df.columns.duplicated()]
 
     # =====================================================
-    # COLUMN MAPPING
+    # COLUMN DETECTION
     # =====================================================
     column_mapping = {}
 
@@ -164,17 +158,9 @@ if uploaded_file:
 
         c = str(col).lower()
 
-        # FIRST NAME
-        if "first name" in c:
-            column_mapping[col] = "first_name"
-
-        # LAST NAME
-        elif "last name" in c:
-            column_mapping[col] = "last_name"
-
-        # EMAIL
-        elif "email" in c:
-            column_mapping[col] = "email"
+        # USER NAME
+        if "user name" in c:
+            column_mapping[col] = "user_name"
 
         # JOIN TIME
         elif "join time" in c:
@@ -191,14 +177,6 @@ if uploaded_file:
         ):
             column_mapping[col] = "session_time"
 
-        # COUNTRY
-        elif "country" in c:
-            column_mapping[col] = "country"
-
-        # APPROVAL
-        elif "approval" in c:
-            column_mapping[col] = "approval_status"
-
     # RENAME
     df.rename(
         columns=column_mapping,
@@ -206,69 +184,67 @@ if uploaded_file:
     )
 
     # =====================================================
-    # NAME CREATION
+    # REQUIRED COLUMNS CHECK
     # =====================================================
-    if (
-        "first_name" in df.columns
-        and "last_name" in df.columns
-    ):
+    required_cols = [
+        "user_name",
+        "session_time"
+    ]
 
-        df["full_name"] = (
-            df["first_name"]
-            .fillna("")
-            .astype(str)
-            + " "
-            + df["last_name"]
-            .fillna("")
-            .astype(str)
-        ).str.strip()
+    missing_cols = [
+        col for col in required_cols
+        if col not in df.columns
+    ]
 
-    elif "first_name" in df.columns:
+    if missing_cols:
 
-        df["full_name"] = (
-            df["first_name"]
-            .astype(str)
+        st.error(
+            f"❌ Missing Columns: {missing_cols}"
         )
 
-    else:
-
-        df["full_name"] = "Unknown"
+        st.stop()
 
     # =====================================================
-    # USER ID
+    # CLEAN DATA
     # =====================================================
-    if "email" in df.columns:
+    df["user_name"] = (
+        df["user_name"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
 
-        df["user_id"] = (
-            df["email"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-        )
+    # REMOVE EMPTY USERS
+    df = df[
+        df["user_name"] != ""
+    ]
 
-        # FALLBACK TO NAME
-        df.loc[
-            df["user_id"] == "",
-            "user_id"
-        ] = df["full_name"]
+    # REMOVE GARBAGE VALUES
+    bad_values = [
+        "yes",
+        "approved",
+        "guest",
+        "india"
+    ]
 
-    else:
-
-        df["user_id"] = df["full_name"]
+    df = df[
+        ~df["user_name"]
+        .str.lower()
+        .isin(bad_values)
+    ]
 
     # =====================================================
-    # SESSION TIME FIX
+    # SESSION TIME
     # =====================================================
-    if "session_time" in df.columns:
+    df["session_time"] = pd.to_numeric(
+        df["session_time"],
+        errors="coerce"
+    ).fillna(0)
 
-        df["session_time"] = pd.to_numeric(
-            df["session_time"],
-            errors="coerce"
-        ).fillna(0)
-
-    else:
-
-        df["session_time"] = 0
+    # KEEP VALID WATCH TIMES
+    df = df[
+        df["session_time"] > 0
+    ]
 
     # =====================================================
     # DATE CONVERSION
@@ -280,15 +256,6 @@ if uploaded_file:
             errors="coerce"
         )
 
-        df["hour"] = (
-            df["join_time"]
-            .dt.hour
-        )
-
-    else:
-
-        df["hour"] = 0
-
     if "leave_time" in df.columns:
 
         df["leave_time"] = pd.to_datetime(
@@ -297,103 +264,49 @@ if uploaded_file:
         )
 
     # =====================================================
-    # REMOVE BLANK USERS
+    # USER ANALYTICS
     # =====================================================
-    df = df[
-        df["user_id"]
-        .astype(str)
-        .str.len() > 0
-    ]
-
-    # =====================================================
-    # JOIN COUNTS
-    # =====================================================
-    join_counts = (
-        df.groupby("user_id")
-        .size()
-        .reset_index(name="join_count")
-    )
-
-    # =====================================================
-    # USER AGGREGATION
-    # =====================================================
-    agg_dict = {
-        "session_time": "sum",
-        "full_name": "first"
-    }
-
-    if "join_time" in df.columns:
-        agg_dict["join_time"] = "min"
-
-    if "leave_time" in df.columns:
-        agg_dict["leave_time"] = "max"
-
-    if "country" in df.columns:
-        agg_dict["country"] = "first"
-
-    if "approval_status" in df.columns:
-        agg_dict["approval_status"] = "first"
-
     user_df = (
-        df.groupby("user_id")
-        .agg(agg_dict)
+        df.groupby("user_name")
+        .agg(
+            total_watch_time=(
+                "session_time",
+                "sum"
+            ),
+
+            avg_watch_time=(
+                "session_time",
+                "mean"
+            ),
+
+            join_count=(
+                "user_name",
+                "count"
+            ),
+
+            first_join=(
+                "join_time",
+                "min"
+            ),
+
+            last_leave=(
+                "leave_time",
+                "max"
+            )
+        )
         .reset_index()
     )
 
-    # =====================================================
-    # MERGE JOIN COUNTS
-    # =====================================================
-    user_df = user_df.merge(
-        join_counts,
-        on="user_id",
-        how="left"
-    )
-
-    # =====================================================
-    # RENAME
-    # =====================================================
-    user_df.rename(
-        columns={
-            "session_time": "total_watch_time",
-            "join_time": "first_join",
-            "leave_time": "last_leave"
-        },
-        inplace=True
-    )
-
-    # =====================================================
-    # AVG WATCH TIME
-    # =====================================================
+    # ROUND
     user_df["avg_watch_time"] = (
-        user_df["total_watch_time"]
-        / user_df["join_count"]
-    ).round(1)
-
-    # =====================================================
-    # ENGAGEMENT %
-    # =====================================================
-    max_watch = (
-        user_df["total_watch_time"]
-        .max()
+        user_df["avg_watch_time"]
+        .round(1)
     )
 
-    if max_watch > 0:
-
-        user_df["engagement_%"] = (
-            (
-                user_df["total_watch_time"]
-                / max_watch
-            ) * 100
-        ).round(1)
-
-    else:
-
-        user_df["engagement_%"] = 0
-
     # =====================================================
-    # DASHBOARD METRICS
+    # METRICS
     # =====================================================
-    unique_users = len(user_df)
+    total_users = len(user_df)
 
     total_joins = (
         user_df["join_count"]
@@ -406,16 +319,9 @@ if uploaded_file:
         1
     )
 
-    avg_engagement = round(
-        user_df["engagement_%"]
-        .mean(),
-        1
-    )
-
-    peak_hour = (
-        df["hour"].mode()[0]
-        if not df["hour"].mode().empty
-        else "N/A"
+    max_watch = (
+        user_df["total_watch_time"]
+        .max()
     )
 
     # =====================================================
@@ -425,7 +331,7 @@ if uploaded_file:
 
     c1.metric(
         "👥 Unique Users",
-        unique_users
+        total_users
     )
 
     c2.metric(
@@ -435,16 +341,12 @@ if uploaded_file:
 
     c3.metric(
         "⏱ Avg Watch Time",
-        avg_watch
+        f"{avg_watch} mins"
     )
 
     c4.metric(
-        "🔥 Avg Engagement",
-        f"{avg_engagement}%"
-    )
-
-    st.info(
-        f"⏰ Peak Join Hour: {peak_hour}:00"
+        "🏆 Highest Watch Time",
+        f"{max_watch} mins"
     )
 
     # =====================================================
@@ -459,16 +361,7 @@ if uploaded_file:
     if search:
 
         filtered_users = filtered_users[
-            filtered_users["full_name"]
-            .astype(str)
-            .str.contains(
-                search,
-                case=False,
-                na=False
-            )
-            |
-            filtered_users["user_id"]
-            .astype(str)
+            filtered_users["user_name"]
             .str.contains(
                 search,
                 case=False,
@@ -477,35 +370,12 @@ if uploaded_file:
         ]
 
     # =====================================================
-    # USER REPORT
+    # TABLE
     # =====================================================
-    st.subheader("📋 Attendee Analytics")
-
-    display_cols = [
-        "full_name",
-        "user_id",
-        "total_watch_time",
-        "join_count",
-        "avg_watch_time",
-        "engagement_%"
-    ]
-
-    optional_cols = [
-        "first_join",
-        "last_leave",
-        "country",
-        "approval_status"
-    ]
-
-    for col in optional_cols:
-
-        if col in filtered_users.columns:
-            display_cols.append(col)
+    st.subheader("📋 User Attendance Analytics")
 
     st.dataframe(
-        filtered_users[
-            display_cols
-        ].sort_values(
+        filtered_users.sort_values(
             "total_watch_time",
             ascending=False
         ),
@@ -515,7 +385,7 @@ if uploaded_file:
     # =====================================================
     # TOP USERS CHART
     # =====================================================
-    st.subheader("📊 Top Engaged Users")
+    st.subheader("📊 Users With Highest Watch Time")
 
     top_users = (
         filtered_users
@@ -523,85 +393,18 @@ if uploaded_file:
             "total_watch_time",
             ascending=False
         )
-        .head(10)
+        .head(15)
     )
 
-    fig1 = px.bar(
+    fig = px.bar(
         top_users,
-        x="full_name",
+        x="user_name",
         y="total_watch_time",
         title="Top Users by Watch Time"
     )
 
     st.plotly_chart(
-        fig1,
-        use_container_width=True
-    )
-
-    # =====================================================
-    # WATCH TIME DISTRIBUTION
-    # =====================================================
-    st.subheader("📈 Watch Time Distribution")
-
-    fig2 = px.histogram(
-        filtered_users,
-        x="total_watch_time",
-        nbins=30
-    )
-
-    st.plotly_chart(
-        fig2,
-        use_container_width=True
-    )
-
-    # =====================================================
-    # COUNTRY DISTRIBUTION
-    # =====================================================
-    if "country" in filtered_users.columns:
-
-        st.subheader("🌍 Country Distribution")
-
-        country_df = (
-            filtered_users["country"]
-            .value_counts()
-            .reset_index()
-        )
-
-        country_df.columns = [
-            "country",
-            "users"
-        ]
-
-        fig3 = px.pie(
-            country_df.head(10),
-            names="country",
-            values="users"
-        )
-
-        st.plotly_chart(
-            fig3,
-            use_container_width=True
-        )
-
-    # =====================================================
-    # HOURLY TREND
-    # =====================================================
-    st.subheader("⏰ Hourly Join Trend")
-
-    hourly = (
-        df["hour"]
-        .value_counts()
-        .sort_index()
-    )
-
-    fig4 = px.line(
-        x=hourly.index,
-        y=hourly.values,
-        markers=True
-    )
-
-    st.plotly_chart(
-        fig4,
+        fig,
         use_container_width=True
     )
 
@@ -609,7 +412,7 @@ if uploaded_file:
     # DOWNLOAD
     # =====================================================
     st.download_button(
-        "📥 Download Analytics",
+        "📥 Download CSV",
         filtered_users.to_csv(index=False),
         "webinar_analytics.csv",
         mime="text/csv"
