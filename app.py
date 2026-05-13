@@ -176,34 +176,27 @@ if uploaded_file:
 
         c = str(col).lower()
 
-        # USER NAME
         if "user name" in c:
             column_mapping[col] = "user_name"
 
-        # FIRST NAME
         elif "first name" in c:
             column_mapping[col] = "first_name"
 
-        # LAST NAME
         elif "last name" in c:
             column_mapping[col] = "last_name"
 
-        # JOIN TIME
         elif "join time" in c:
             column_mapping[col] = "join_time"
 
-        # LEAVE TIME
         elif "leave time" in c:
             column_mapping[col] = "leave_time"
 
-        # SESSION TIME
         elif (
             "time in ses" in c
             or "time in session" in c
         ):
             column_mapping[col] = "session_time"
 
-        # COUNTRY
         elif "country" in c:
             column_mapping[col] = "country"
 
@@ -343,43 +336,91 @@ if uploaded_file:
     )
 
     # =====================================================
-    # ENGAGEMENT %
+    # WEBINAR DURATION
     # =====================================================
     webinar_duration = (
-        user_df["total_watch_time"]
-        .max()
+        df["session_time"].max()
     )
 
-    if webinar_duration > 0:
-
-        user_df["completion_%"] = (
-            (
-                user_df["total_watch_time"]
-                / webinar_duration
-            ) * 100
-        ).round(1)
-
-    else:
-
-        user_df["completion_%"] = 0
+    # =====================================================
+    # FIX OVERLAPPING WATCH TIME
+    # =====================================================
+    user_df["total_watch_time"] = (
+        user_df["total_watch_time"]
+        .clip(upper=webinar_duration)
+    )
 
     # =====================================================
-    # ENGAGEMENT LEVEL
+    # QUALITY SCORE
     # =====================================================
-    def engagement_bucket(x):
+    user_df["quality_score"] = (
+        user_df["total_watch_time"]
+        / user_df["join_count"]
+    ).round(1)
 
-        if x >= 80:
-            return "Highly Engaged"
+    # =====================================================
+    # COMPLETION %
+    # =====================================================
+    user_df["completion_%"] = (
+        (
+            user_df["total_watch_time"]
+            / webinar_duration
+        ) * 100
+    ).round(1)
 
-        elif x >= 40:
-            return "Moderately Engaged"
+    # =====================================================
+    # ATTENDANCE STABILITY
+    # =====================================================
+    def attendance_stability(x):
+
+        if x <= 2:
+            return "Stable"
+
+        elif x <= 5:
+            return "Moderate Rejoins"
 
         else:
+            return "Unstable"
+
+    user_df["attendance_stability"] = (
+        user_df["join_count"]
+        .apply(attendance_stability)
+    )
+
+    # =====================================================
+    # REAL ENGAGEMENT LOGIC
+    # =====================================================
+    def engagement_level(row):
+
+        watch_time = row["total_watch_time"]
+        joins = row["join_count"]
+
+        # HIGHLY ENGAGED
+        if (
+            watch_time >= 150
+            and joins <= 3
+        ):
+
+            return "Highly Engaged"
+
+        # MODERATE
+        elif (
+            watch_time >= 60
+        ):
+
+            return "Moderately Engaged"
+
+        # LOW
+        else:
+
             return "Low Engagement"
 
     user_df["engagement_level"] = (
-        user_df["completion_%"]
-        .apply(engagement_bucket)
+        user_df
+        .apply(
+            engagement_level,
+            axis=1
+        )
     )
 
     # =====================================================
@@ -393,7 +434,7 @@ if uploaded_file:
     )
 
     avg_watch = round(
-        user_df["total_watch_time"]
+        user_df["quality_score"]
         .mean(),
         1
     )
@@ -419,8 +460,8 @@ if uploaded_file:
     )
 
     c3.metric(
-        "⏱ Avg Watch Time",
-        f"{avg_watch} mins"
+        "⭐ Avg Quality Score",
+        avg_watch
     )
 
     c4.metric(
@@ -433,7 +474,6 @@ if uploaded_file:
     # =====================================================
     st.sidebar.header("🎛 Filters")
 
-    # ENGAGEMENT FILTER
     engagement_filter = st.sidebar.multiselect(
         "Engagement Level",
         user_df["engagement_level"]
@@ -447,7 +487,9 @@ if uploaded_file:
         .isin(engagement_filter)
     ]
 
+    # =====================================================
     # SEARCH
+    # =====================================================
     search = st.text_input(
         "🔍 Search User"
     )
@@ -464,13 +506,13 @@ if uploaded_file:
         ]
 
     # =====================================================
-    # ATTENDEE TABLE
+    # TABLE
     # =====================================================
     st.subheader("📋 Attendee Analytics")
 
     st.dataframe(
         filtered_users.sort_values(
-            "total_watch_time",
+            "quality_score",
             ascending=False
         ),
         use_container_width=True
@@ -479,12 +521,12 @@ if uploaded_file:
     # =====================================================
     # TOP USERS CHART
     # =====================================================
-    st.subheader("📊 Top Attendees By Watch Time")
+    st.subheader("📊 Top Quality Attendees")
 
     top_users = (
         filtered_users
         .sort_values(
-            "total_watch_time",
+            "quality_score",
             ascending=False
         )
         .head(15)
@@ -493,9 +535,9 @@ if uploaded_file:
     fig1 = px.bar(
         top_users,
         x="user_name",
-        y="total_watch_time",
-        color="engagement_level",
-        title="Most Engaged Attendees"
+        y="quality_score",
+        color="attendance_stability",
+        title="Top Attendees By Quality Score"
     )
 
     st.plotly_chart(
@@ -504,7 +546,7 @@ if uploaded_file:
     )
 
     # =====================================================
-    # JOIN COUNT CHART
+    # REJOIN CHART
     # =====================================================
     st.subheader("🔁 Rejoin Behaviour")
 
@@ -512,7 +554,7 @@ if uploaded_file:
         filtered_users,
         x="join_count",
         nbins=20,
-        title="How Many Times Users Rejoined"
+        title="User Rejoin Distribution"
     )
 
     st.plotly_chart(
