@@ -13,10 +13,10 @@ st.set_page_config(
 st.title("🚀 Webinar Analyzer PRO+")
 
 # ==================================================
-# FILE UPLOADER
+# FILE UPLOAD
 # ==================================================
 uploaded_file = st.file_uploader(
-    "Upload File",
+    "Upload Webinar File",
     type=["xls", "xlsx", "csv", "txt", "tsv"]
 )
 
@@ -29,7 +29,7 @@ def read_file(file, header=None):
 
         file.seek(0)
 
-        # CSV / TXT / TSV
+        # CSV / TXT
         if file.name.endswith((".csv", ".txt", ".tsv")):
 
             df = pd.read_csv(
@@ -68,19 +68,20 @@ def read_file(file, header=None):
 
 
 # ==================================================
-# HEADER DETECTION
+# FIND HEADER ROW
 # ==================================================
 def find_header_row(df):
 
     keywords = [
+        "name",
         "email",
         "mail",
-        "name",
         "join",
         "leave",
         "duration",
         "time",
-        "minutes"
+        "minutes",
+        "attendee"
     ]
 
     max_rows = min(len(df), 20)
@@ -113,7 +114,7 @@ def find_header_row(df):
 
 
 # ==================================================
-# AUTO COLUMN DETECTION
+# COLUMN DETECTION
 # ==================================================
 def auto_map_columns(df):
 
@@ -121,26 +122,50 @@ def auto_map_columns(df):
 
     for col in df.columns:
 
-        c = str(col).lower()
+        c = str(col).lower().strip()
 
         # EMAIL
-        if any(k in c for k in ["email", "mail"]):
+        if any(k in c for k in [
+            "email",
+            "mail",
+            "user email"
+        ]):
             mapping[col] = "email"
 
         # NAME
-        elif any(k in c for k in ["name", "user"]):
+        elif any(k in c for k in [
+            "name",
+            "participant",
+            "attendee"
+        ]):
             mapping[col] = "name"
 
         # JOIN TIME
-        elif any(k in c for k in ["join", "start", "login"]):
+        elif any(k in c for k in [
+            "join time",
+            "joined",
+            "start time",
+            "login"
+        ]):
             mapping[col] = "join_time"
 
         # LEAVE TIME
-        elif any(k in c for k in ["leave", "end", "logout"]):
+        elif any(k in c for k in [
+            "leave time",
+            "left",
+            "end time",
+            "logout"
+        ]):
             mapping[col] = "leave_time"
 
         # SESSION TIME
-        elif any(k in c for k in ["duration", "minutes", "mins"]):
+        elif any(k in c for k in [
+            "duration",
+            "watch time",
+            "session duration",
+            "time in session",
+            "minutes"
+        ]):
             mapping[col] = "session_time"
 
     return mapping
@@ -152,24 +177,32 @@ def auto_map_columns(df):
 if uploaded_file:
 
     # ==================================================
-    # READ RAW FILE
+    # RAW READ
     # ==================================================
-    raw_df = read_file(uploaded_file, header=None)
+    raw_df = read_file(
+        uploaded_file,
+        header=None
+    )
 
     if raw_df is None or raw_df.empty:
         st.stop()
 
     # ==================================================
-    # FIND HEADER ROW
+    # FIND HEADER
     # ==================================================
     header_row = find_header_row(raw_df)
 
-    st.sidebar.success(f"✅ Header Row Detected: {header_row}")
+    st.sidebar.success(
+        f"✅ Header Row Detected: {header_row}"
+    )
 
     # ==================================================
     # FINAL READ
     # ==================================================
-    df = read_file(uploaded_file, header=header_row)
+    df = read_file(
+        uploaded_file,
+        header=header_row
+    )
 
     if df is None or df.empty:
         st.stop()
@@ -191,17 +224,21 @@ if uploaded_file:
     df = df.loc[:, ~df.columns.duplicated()]
 
     # ==================================================
-    # AUTO MAP COLUMNS
+    # AUTO MAP
     # ==================================================
     col_map = auto_map_columns(df)
 
-    df.rename(columns=col_map, inplace=True)
+    df.rename(
+        columns=col_map,
+        inplace=True
+    )
 
-    # REMOVE DUPLICATES AGAIN AFTER RENAMING
+    # REMOVE DUPLICATE COLUMNS AGAIN
     df = df.loc[:, ~df.columns.duplicated()]
 
+    # DEBUG
     st.sidebar.write("Detected Columns")
-    st.sidebar.write(col_map)
+    st.sidebar.write(df.columns.tolist())
 
     # ==================================================
     # EMAIL FALLBACK
@@ -212,7 +249,12 @@ if uploaded_file:
 
             try:
 
-                if df[col].astype(str).str.contains("@").any():
+                if (
+                    df[col]
+                    .astype(str)
+                    .str.contains("@")
+                    .any()
+                ):
 
                     df.rename(
                         columns={col: "email"},
@@ -223,18 +265,6 @@ if uploaded_file:
 
             except:
                 pass
-
-    # STILL NO EMAIL
-    if "email" not in df.columns:
-
-        df["email"] = df.index.astype(str)
-
-        st.warning(
-            "⚠️ Email column not found. Using row index."
-        )
-
-    # REMOVE EMPTY EMAILS
-    df = df[df["email"].notna()]
 
     # ==================================================
     # DATE CONVERSION
@@ -286,75 +316,124 @@ if uploaded_file:
     if "join_time" in df.columns:
 
         df["hour"] = df["join_time"].dt.hour
-        df["date"] = df["join_time"].dt.date
 
     else:
 
         df["hour"] = 0
-        df["date"] = None
+
+    # ==================================================
+    # USER IDENTIFIER
+    # ==================================================
+    if "email" in df.columns:
+
+        df["user_id"] = (
+            df["email"]
+            .astype(str)
+            .str.strip()
+        )
+
+    elif "name" in df.columns:
+
+        df["user_id"] = (
+            df["name"]
+            .astype(str)
+            .str.strip()
+        )
+
+    else:
+
+        df["user_id"] = df.index.astype(str)
+
+    # REMOVE EMPTY IDS
+    df = df[
+        df["user_id"]
+        .astype(str)
+        .str.len() > 0
+    ]
 
     # ==================================================
     # USER AGGREGATION
     # ==================================================
     agg_dict = {
-        "session_time": "sum"
+        "session_time": "sum",
+        "user_id": "count"
     }
 
+    # NAME
     if "name" in df.columns:
         agg_dict["name"] = "first"
 
+    # JOIN TIME
     if "join_time" in df.columns:
-        agg_dict["join_time"] = "count"
+        agg_dict["join_time"] = "min"
+
+    # LEAVE TIME
+    if "leave_time" in df.columns:
+        agg_dict["leave_time"] = "max"
 
     user_df = (
-        df.groupby("email")
+        df.groupby("user_id")
         .agg(agg_dict)
         .reset_index()
     )
 
-    # REMOVE DUPLICATE COLUMNS AGAIN
-    user_df = user_df.loc[:, ~user_df.columns.duplicated()]
-
     # RENAME
-    if "join_time" in user_df.columns:
-
-        user_df.rename(
-            columns={
-                "join_time": "join_count"
-            },
-            inplace=True
-        )
-
     user_df.rename(
         columns={
-            "session_time": "total_time"
+            "session_time": "total_watch_time",
+            "user_id": "join_count",
+            "join_time": "first_join",
+            "leave_time": "last_leave"
         },
         inplace=True
     )
 
+    # AVG WATCH TIME
+    user_df["avg_watch_time"] = (
+        user_df["total_watch_time"]
+        / user_df["join_count"]
+    ).round(1)
+
+    # ENGAGEMENT %
+    max_time = (
+        user_df["total_watch_time"]
+        .max()
+    )
+
+    if max_time > 0:
+
+        user_df["engagement_%"] = (
+            (
+                user_df["total_watch_time"]
+                / max_time
+            ) * 100
+        ).round(1)
+
+    else:
+
+        user_df["engagement_%"] = 0
+
     # ==================================================
     # METRICS
     # ==================================================
-    unique_users = df["email"].nunique()
+    unique_users = len(user_df)
 
-    total_joins = len(df)
+    total_joins = (
+        user_df["join_count"]
+        .sum()
+    )
 
     avg_time = round(
-        df["session_time"].mean(),
+        user_df["total_watch_time"]
+        .mean(),
         1
     )
 
-    engagement_rate = round(
-        (
-            len(
-                user_df[
-                    user_df["total_time"] > 50
-                ]
-            )
-            / len(user_df)
-        ) * 100,
+    avg_engagement = round(
+        user_df["engagement_%"]
+        .mean(),
         1
-    ) if len(user_df) > 0 else 0
+    )
 
     peak_hour = (
         df["hour"].mode()[0]
@@ -367,41 +446,54 @@ if uploaded_file:
     # ==================================================
     c1, c2, c3, c4 = st.columns(4)
 
-    c1.metric("👥 Users", unique_users)
-
-    c2.metric("🔁 Joins", total_joins)
-
-    c3.metric("⏱ Avg Time", avg_time)
-
-    c4.metric("🔥 Engagement", f"{engagement_rate}%")
-
-    st.info(f"⏰ Peak Join Hour: {peak_hour}:00")
-
-    # ==================================================
-    # FILTERS
-    # ==================================================
-    st.sidebar.header("🎛 Filters")
-
-    min_time = st.sidebar.slider(
-        "Minimum Session Time",
-        0,
-        300,
-        0
+    c1.metric(
+        "👥 Users",
+        unique_users
     )
 
-    filtered_users = user_df[
-        user_df["total_time"] >= min_time
-    ]
+    c2.metric(
+        "🔁 Total Joins",
+        total_joins
+    )
+
+    c3.metric(
+        "⏱ Avg Watch Time",
+        avg_time
+    )
+
+    c4.metric(
+        "🔥 Avg Engagement",
+        f"{avg_engagement}%"
+    )
+
+    st.info(
+        f"⏰ Peak Join Hour: {peak_hour}:00"
+    )
 
     # ==================================================
     # SEARCH
     # ==================================================
-    search = st.text_input("🔍 Search User")
+    search = st.text_input(
+        "🔍 Search User"
+    )
+
+    filtered_users = user_df.copy()
 
     if search:
 
         filtered_users = filtered_users[
-            filtered_users["email"]
+            filtered_users["join_count"]
+            .astype(str)
+            .str.contains(
+                search,
+                case=False,
+                na=False
+            )
+            |
+            filtered_users.get(
+                "name",
+                pd.Series(dtype=str)
+            )
             .astype(str)
             .str.contains(
                 search,
@@ -417,7 +509,7 @@ if uploaded_file:
 
     st.dataframe(
         filtered_users.sort_values(
-            "total_time",
+            "total_watch_time",
             ascending=False
         ),
         use_container_width=True
@@ -430,9 +522,9 @@ if uploaded_file:
 
     fig1 = px.bar(
         filtered_users.head(10),
-        x="email",
-        y="total_time",
-        title="Top Users by Engagement"
+        x="name" if "name" in filtered_users.columns else "join_count",
+        y="total_watch_time",
+        title="Top Users by Watch Time"
     )
 
     st.plotly_chart(
@@ -460,23 +552,6 @@ if uploaded_file:
 
     st.plotly_chart(
         fig2,
-        use_container_width=True
-    )
-
-    # ==================================================
-    # SESSION DISTRIBUTION
-    # ==================================================
-    st.subheader("📈 Session Time Distribution")
-
-    fig3 = px.histogram(
-        df,
-        x="session_time",
-        nbins=30,
-        title="Session Duration Distribution"
-    )
-
-    st.plotly_chart(
-        fig3,
         use_container_width=True
     )
 
