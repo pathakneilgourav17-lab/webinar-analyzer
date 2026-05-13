@@ -41,7 +41,7 @@ def read_file(file, header=None):
                 on_bad_lines="skip"
             )
 
-        # OLD XLS
+        # XLS
         elif file.name.endswith(".xls"):
 
             df = pd.read_excel(
@@ -177,7 +177,7 @@ def auto_map_columns(df):
 if uploaded_file:
 
     # ==================================================
-    # RAW READ
+    # RAW FILE
     # ==================================================
     raw_df = read_file(
         uploaded_file,
@@ -233,7 +233,7 @@ if uploaded_file:
         inplace=True
     )
 
-    # REMOVE DUPLICATE COLUMNS AGAIN
+    # REMOVE DUPLICATES AGAIN
     df = df.loc[:, ~df.columns.duplicated()]
 
     # DEBUG
@@ -352,22 +352,30 @@ if uploaded_file:
     ]
 
     # ==================================================
+    # JOIN COUNTS
+    # ==================================================
+    join_counts = (
+        df.groupby("user_id")
+        .size()
+        .reset_index(name="join_count")
+    )
+
+    # ==================================================
     # USER AGGREGATION
     # ==================================================
     agg_dict = {
-        "session_time": "sum",
-        "user_id": "count"
+        "session_time": "sum"
     }
 
     # NAME
     if "name" in df.columns:
         agg_dict["name"] = "first"
 
-    # JOIN TIME
+    # FIRST JOIN
     if "join_time" in df.columns:
         agg_dict["join_time"] = "min"
 
-    # LEAVE TIME
+    # LAST LEAVE
     if "leave_time" in df.columns:
         agg_dict["leave_time"] = "max"
 
@@ -377,24 +385,36 @@ if uploaded_file:
         .reset_index()
     )
 
-    # RENAME
+    # MERGE JOIN COUNTS
+    user_df = user_df.merge(
+        join_counts,
+        on="user_id",
+        how="left"
+    )
+
+    # ==================================================
+    # RENAME COLUMNS
+    # ==================================================
     user_df.rename(
         columns={
             "session_time": "total_watch_time",
-            "user_id": "join_count",
             "join_time": "first_join",
             "leave_time": "last_leave"
         },
         inplace=True
     )
 
+    # ==================================================
     # AVG WATCH TIME
+    # ==================================================
     user_df["avg_watch_time"] = (
         user_df["total_watch_time"]
         / user_df["join_count"]
     ).round(1)
 
+    # ==================================================
     # ENGAGEMENT %
+    # ==================================================
     max_time = (
         user_df["total_watch_time"]
         .max()
@@ -482,7 +502,7 @@ if uploaded_file:
     if search:
 
         filtered_users = filtered_users[
-            filtered_users["join_count"]
+            filtered_users["user_id"]
             .astype(str)
             .str.contains(
                 search,
@@ -522,7 +542,7 @@ if uploaded_file:
 
     fig1 = px.bar(
         filtered_users.head(10),
-        x="name" if "name" in filtered_users.columns else "join_count",
+        x="name" if "name" in filtered_users.columns else "user_id",
         y="total_watch_time",
         title="Top Users by Watch Time"
     )
